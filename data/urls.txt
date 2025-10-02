@@ -1,0 +1,19 @@
+# Transformers
+https://arxiv.org/pdf/1706.03762.pdf
+https://arxiv.org/pdf/2005.14165.pdf
+
+# Diffusion Models / Vision
+https://arxiv.org/pdf/2006.11239.pdf
+https://arxiv.org/pdf/2104.06406.pdf
+
+# Graph Neural Networks
+https://arxiv.org/pdf/1609.02907.pdf
+https://arxiv.org/pdf/1812.08434.pdf
+
+# Reinforcement Learning
+https://arxiv.org/pdf/1312.5602.pdf
+https://arxiv.org/pdf/1707.06347.pdf
+
+# Computer Vision (CNNs)
+https://arxiv.org/pdf/1409.1556.pdf
+https://arxiv.org/pdf/1512.03385.pdf
