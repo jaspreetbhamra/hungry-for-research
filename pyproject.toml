@@ -3,22 +3,47 @@ name = "hungry-for-research"
 version = "0.1.0"
 description = "A local RAG-powered assistant for research papers"
 readme = "README.md"
-requires-python = "==3.12"
+requires-python = ">=3.12"
 
+# core dependencies
 dependencies = [
     "streamlit",
-    "langchain",
-    "chromadb",
-    "sentence-transformers",
+    "langchain>=0.3.0",               # pin to recent
+    "langchain-community>=0.3.30",    # community integrations
+    "chromadb>=0.5.0",
+    "sentence-transformers>=2.7.0",
     "pypdf",
     "python-dotenv",
-    "ollama", # for local LLMs
-    "pytest",
-    "langchain-community>=0.3.30",
+    "ollama",                         # wrapper package
+    "beautifulsoup4",
+    "requests",
+    "nltk",
+    "tenacity",
+    "tqdm",
+    "orjson",
 ]
 
-[tool.uv]
-dev-dependencies = [
-    "ruff",      # linting
-    "black",     # formatting
+[dependency-groups]
+# keep dev deps separate from core deps
+dev = [
+    "ruff>=0.5.0",   # linting
+    "black>=24.0",   # formatting
+    "pytest>=8.0",   # testing
 ]
+
+# optional: configure package layout (recommended if you use src/)
+[tool.uv.sources]
+hungry-for-research = { path = "src" }
+
+[tool.uv]
+package = true
+
+[tool.setuptools]
+packages = ["src"]
+
+# optional but nice: ruff & black defaults
+[tool.ruff]
+target-version = "py312"
+
+[tool.black]
+target-version = ["py312"]
