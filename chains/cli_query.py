@@ -66,11 +66,11 @@ def main():
     )
 
     # LLM
-    llm = load_local_llm(model_name=args.model, temperature=args.temperature)
+    qa_llm = load_local_llm("llm_qa")
 
     # Chain
     chain = build_qa_chain(
-        llm=llm,
+        llm=qa_llm,
         retriever=retriever,
         chain_type=args.chain_type,
         return_source_documents=True,

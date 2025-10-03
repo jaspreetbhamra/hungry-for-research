@@ -9,6 +9,9 @@ index:
 query:
 	uv run python -m chains.cli_query --collection papers --mode mmr --k 5 --fetch_k 30 --lambda_mult 0.4 --chain_type stuff "What does ResNet change versus VGG?"
 
+hybrid_query:
+	uv run python -m chains.cli_hybrid_query --neo "What optimizers are mentioned in Transformer papers?"
+
 test:
 	uv run pytest tests/
 

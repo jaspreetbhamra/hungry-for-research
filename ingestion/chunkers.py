@@ -5,11 +5,11 @@ from typing import Iterable, List
 import nltk
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-from common.settings import settings
+from common.config import yaml_config
 from ingestion.document_models import Chunk, RawDoc
 from ingestion.hash_utils import sha1_text
 
-# Ensure punkt is available for sentence tokenization (download once)
+# Ensure punkt is available for sentence tokenization
 try:
     nltk.data.find("tokenizers/punkt")
 except LookupError:
@@ -17,16 +17,23 @@ except LookupError:
 
 
 def chunk_documents(docs: Iterable[RawDoc]) -> List[Chunk]:
-    if settings.splitter_mode == "sentence":
+    """
+    Split documents into chunks according to the configured chunking mode.
+    """
+    if yaml_config.chunking.mode == "sentence":
         return _sentence_chunks(docs)
     else:
         return _recursive_chunks(docs)
 
 
 def _recursive_chunks(docs: Iterable[RawDoc]) -> List[Chunk]:
+    """
+    Use LangChain's RecursiveCharacterTextSplitter to create overlapping
+    character-based chunks, good for embeddings + retrieval.
+    """
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=settings.chunk_size,
-        chunk_overlap=settings.chunk_overlap,
+        chunk_size=yaml_config.chunking.chunk_size,
+        chunk_overlap=yaml_config.chunking.chunk_overlap,
         separators=["\n\n", "\n", " ", ""],
     )
     out: List[Chunk] = []
@@ -45,11 +52,15 @@ def _recursive_chunks(docs: Iterable[RawDoc]) -> List[Chunk]:
 
 
 def _sentence_chunks(docs: Iterable[RawDoc]) -> List[Chunk]:
+    """
+    Create chunks based on sentences, concatenated until they hit the configured max length.
+    Supports overlap (carryover characters from previous chunk).
+    """
     from nltk.tokenize import sent_tokenize
 
     out: List[Chunk] = []
-    max_len = settings.chunk_size
-    overlap = settings.chunk_overlap
+    max_len = yaml_config.chunking.chunk_size
+    overlap = yaml_config.chunking.chunk_overlap
 
     for d in docs:
         sents = sent_tokenize(d.text)
@@ -79,11 +90,10 @@ def _sentence_chunks(docs: Iterable[RawDoc]) -> List[Chunk]:
                         )
                     )
                     idx += 1
-                    # start next with overlap: carry last ~overlap chars
                     carry = piece[-overlap:] if overlap > 0 else ""
                     buf = [carry, s] if carry else [s]
                     buf_len = len(" ".join(buf))
-        # flush
+        # flush last buffer
         piece = " ".join(buf).strip()
         if piece:
             cid = sha1_text(f"{d.source_id}::{idx}::{piece[:64]}")

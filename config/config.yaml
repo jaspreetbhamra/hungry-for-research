@@ -1,0 +1,39 @@
+app:
+  data_dir: "data/docs"
+  persist_dir: "data/chroma"
+  cache_dir: "data/cache"
+  collection: "papers"
+
+  # New additions
+  max_pdf_pages: 50       # limit PDF ingestion (None = all pages)
+  timeout: 10             # HTTP request timeout in seconds
+  user_agent: "RAG-Assistant/1.0"  # User-Agent for requests
+
+vectorstore:
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+
+chunking:
+  mode: "recursive"   # "recursive" | "sentence"
+  chunk_size: 1000
+  chunk_overlap: 200
+
+retrieval:
+  mode: "mmr"         # "similarity" | "mmr"
+  k: 4
+  fetch_k: 20
+  lambda_mult: 0.5
+  chain_type: "stuff" # "stuff" | "map_reduce" | "refine"
+
+llm_qa:
+  provider: "ollama"
+  model_name: "mistral"
+  temperature: 0.2
+
+llm_extraction:
+  provider: "ollama"
+  model_name: "mistral"
+  temperature: 0.0 # Low temperature makes the LLM more deterministic in relation extraction.
+
+neo4j:
+  enabled: true
+  uri: "bolt://localhost:7687"

@@ -15,15 +15,16 @@ from tenacity import (
     wait_exponential,
 )
 
+from common.config import yaml_config
 from common.logger import get_logger
-from common.settings import settings
 from ingestion.cleaners import strip_header_footer
 from ingestion.document_models import RawDoc
 from ingestion.hash_utils import sha1_text
 
 log = get_logger(__name__)
 
-CACHE_DIR = Path("data/cache")
+# Use cache directory from config
+CACHE_DIR = yaml_config.app.cache_dir
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -92,7 +93,8 @@ def load_from_urls_file(path: Path) -> Iterable[RawDoc]:
 def _load_pdf(path: Path) -> Iterable[RawDoc]:
     reader = PdfReader(str(path))
     pages = reader.pages
-    max_pages = settings.max_pdf_pages or len(pages)
+    # Limit by config if set, else all pages
+    max_pages = getattr(yaml_config.app, "max_pdf_pages", None) or len(pages)
 
     for i, page in enumerate(pages[:max_pages]):
         raw = page.extract_text() or ""
@@ -116,7 +118,11 @@ def _load_pdf(path: Path) -> Iterable[RawDoc]:
 def _fetch(url: str) -> requests.Response:
     """Download URL with retry logic."""
     resp = requests.get(
-        url, timeout=settings.timeout, headers={"User-Agent": settings.user_agent}
+        url,
+        timeout=getattr(yaml_config.app, "timeout", 10),
+        headers={
+            "User-Agent": getattr(yaml_config.app, "user_agent", "RAG-Assistant/1.0")
+        },
     )
     resp.raise_for_status()
     return resp

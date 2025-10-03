@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from langchain_ollama import OllamaLLM
 
+from common.config import yaml_config
 from common.logger import get_logger
 
 log = get_logger(__name__)
 
 
-def load_local_llm(model_name: str = "mistral", temperature: float = 0.2) -> OllamaLLM:
+def load_local_llm(config_section="llm_qa"):
     """
-    Local LLM loader via Ollama. Run `ollama pull mistral` (or your preferred model)
-    beforehand. Keep temperature low for grounding to retrieved context.
+    Load an LLM based on config section (llm_qa or llm_extraction).
     """
-    log.info("Loading Ollama model: %s (T=%.2f)", model_name, temperature)
-    return OllamaLLM(model=model_name, temperature=temperature)
+    cfg = getattr(yaml_config, config_section)
+
+    if cfg.provider == "ollama":
+        return OllamaLLM(model=cfg.model_name, temperature=cfg.temperature)
+    else:
+        raise ValueError(f"Unsupported provider: {cfg.provider}")
