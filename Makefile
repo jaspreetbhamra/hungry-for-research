@@ -12,6 +12,9 @@ query:
 hybrid_query:
 	uv run python -m chains.cli_hybrid_query --neo "What optimizers are mentioned in Transformer papers?"
 
+test_extract:
+	uv run python -m scripts.test_extraction
+
 test:
 	uv run pytest tests/
 

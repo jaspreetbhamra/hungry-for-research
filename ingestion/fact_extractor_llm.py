@@ -1,27 +1,60 @@
 from __future__ import annotations
 
-import json
 from typing import Dict, Generator, Iterable, List
 
-import tqdm
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
+from tqdm import tqdm
 
 from graph.neo4j_client import Neo4jClient
 from ingestion.document_models import Chunk
 from models.llm import load_local_llm
 
 # --- Prompt Template ---
-EXTRACTION_PROMPT = """You are an information extraction system.
-Extract key factual relationships from the text below as (subject, predicate, object) triples.
-Only include concise scientific or technical relations (e.g., "ResNet --uses--> BatchNorm").
+EXTRACTION_PROMPT = """You are an expert information extraction system.
 
-Text:
+Task:
+Extract only clear Subject–Predicate–Object facts about scientific methods, models, datasets, or algorithms.
+
+Rules:
+- Only include facts that express a technical relationship (e.g., "Transformer – uses – Adam Optimizer").
+- Do NOT include vague descriptions ("Transformer is popular", "This paper is about...").
+- If no clear facts exist, return an empty list.
+- Use consistent predicates like ["uses", "introduces", "compares_with", "based_on"].
+- Always output in strict JSON, no text before or after.
+
+Format:
+[
+  {{
+    "subject": "<string>",
+    "predicate": "<string>",
+    "object": "<string>"
+  }},
+  ...
+]
+
+Examples:
+
+Input:
+"This paper introduces the Transformer model, which uses the Adam optimizer."
+
+Output:
+[
+  {{
+    "subject": "Transformer",
+    "predicate": "introduces",
+    "object": "Transformer model"
+  }},
+  {{
+    "subject": "Transformer",
+    "predicate": "uses",
+    "object": "Adam optimizer"
+  }}
+]
+
+Now process the following text:
+
 {chunk}
 
-Output ONLY a JSON list of triples, each formatted as:
-[
-  {{"subject": "...", "predicate": "...", "object": "..."}}
-]
 """
 
 
@@ -34,19 +67,16 @@ class Triple(BaseModel):
     object: str
 
 
-def validate_triples(raw: str) -> List[Triple]:
-    """
-    Validate LLM JSON output against Triple schema.
-    Returns a list of valid Triple objects.
-    """
+def validate_triples(raw_json: str) -> List[Triple]:
+    import orjson
+
     try:
-        data = json.loads(raw)
+        data = orjson.loads(raw_json)
         if not isinstance(data, list):
             return []
-        triples = [Triple(**t) for t in data if isinstance(t, dict)]
-        return triples
-    except (json.JSONDecodeError, ValidationError) as e:
-        print(f"[WARN] Skipping invalid output: {e}")
+        return [Triple(**t) for t in data if isinstance(t, dict)]
+    except Exception as e:
+        print(f"[WARN] Failed to parse triples: {e}")
         return []
 
 
@@ -101,9 +131,9 @@ def extract_facts_from_chunks_llm(
             for t in valid_triples:
                 yield {
                     "paper_id": batch[0].metadata.get("source_id", "unknown"),
-                    "subject": t.subject,
-                    "predicate": t.predicate,
-                    "object": t.object,
+                    "subject": t.subject.strip(),
+                    "predicate": t.predicate.strip(),
+                    "object": t.object.strip(),
                 }
         except Exception as e:
             print(f"[WARN] Failed to extract facts in batch {batch_idx}: {e}")
