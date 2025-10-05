@@ -4,6 +4,7 @@ run:
 	uv run streamlit run src/app/main.py
 
 index:
+	export TOKENIZERS_PARALLELISM=false
 	uv run python -m ingestion.cli_build_index --input_dir data/docs --urls_file data/urls.txt --collection papers
 
 query:

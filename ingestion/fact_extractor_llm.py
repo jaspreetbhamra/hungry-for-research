@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import re
 from typing import Dict, Generator, Iterable, List
 
+import instructor
+import orjson
+from openai import OpenAI
 from pydantic import BaseModel
 from tqdm import tqdm
 
 from graph.neo4j_client import Neo4jClient
 from ingestion.document_models import Chunk
-from models.llm import load_local_llm
 
 # --- Prompt Template ---
 EXTRACTION_PROMPT = """You are an expert information extraction system.
@@ -21,6 +24,17 @@ Rules:
 - If no clear facts exist, return an empty list.
 - Use consistent predicates like ["uses", "introduces", "compares_with", "based_on"].
 - Always output in strict JSON, no text before or after.
+- Output must be a JSON list of objects.
+- Each object MUST have "subject", "predicate", "object".
+- All fields must be non-empty strings.
+- If multiple objects exist, output multiple triples.
+- Do not return arrays inside "object" or "subject".
+- Again, Every triple MUST include subject, predicate, object (all as strings). No missing fields.
+- Example:
+    [
+    {{"subject": "Transformer", "predicate": "introduced_in", "object": "2017"}},
+    {{"subject": "Transformer", "predicate": "applied_to", "object": "machine translation"}}
+    ]
 
 Format:
 [
@@ -68,7 +82,6 @@ class Triple(BaseModel):
 
 
 def validate_triples(raw_json: str) -> List[Triple]:
-    import orjson
 
     try:
         data = orjson.loads(raw_json)
@@ -90,63 +103,97 @@ def batch_chunks(chunks: List[Chunk], size: int = 5):
 
 
 # --------------------
+# Helper: unwrap JSON list
+# --------------------
+def unwrap_json_list(raw: str) -> str:
+    """
+    Extract the first valid JSON array [ ... ] from a raw LLM response.
+    Returns a JSON string containing only that list, or "[]" if not found.
+    """
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if match:
+        return match.group(0)
+    return "[]"
+
+
+# --------------------
 # Fact extraction
 # --------------------
 def extract_facts_from_chunks_llm(
-    chunks: Iterable[Chunk],
-    llm=None,
-    batch_size: int = 5,
-    max_batches: int | None = None,
+    chunks: Iterable["Chunk"],
+    client: OpenAI | None = None,
+    model: str = "mistral",  # your Ollama model
+    max_chunks: int | None = None,  # optional limiter for debugging
     show_progress: bool = True,
 ) -> Generator[Dict[str, str], None, None]:
     """
-    Use an LLM to extract structured triples from text chunks.
+    Extract facts with one LLM call per chunk.
     Yields dicts incrementally: {"paper_id", "subject", "predicate", "object"}.
     """
-    if llm is None:
-        llm = load_local_llm("llm_extraction")
 
-    batch_iter = list(batch_chunks(list(chunks), size=batch_size))
+    if client is None:
+        client = instructor.from_openai(
+            OpenAI(
+                base_url="http://localhost:11434/v1",
+                api_key="ollama",
+            ),
+            mode=instructor.Mode.JSON,
+        )
+
+    chunks_list = list(chunks)
     iterator = (
         tqdm(
-            enumerate(batch_iter),
-            total=len(batch_iter),
+            enumerate(chunks_list),
+            total=len(chunks_list),
             desc="Extracting facts",
-            unit="batch",
+            unit="chunk",
         )
         if show_progress
-        else enumerate(batch_iter)
+        else enumerate(chunks_list)
     )
 
-    for batch_idx, batch in iterator:
-        if max_batches and batch_idx >= max_batches:
+    for idx, chunk in iterator:
+        if max_chunks and idx >= max_chunks:
             break
 
-        text = "\n\n---\n\n".join(c.text[:1500] for c in batch)
-        prompt = EXTRACTION_PROMPT.format(chunk=text)
+        # Each chunk gets its own prompt
+        prompt = EXTRACTION_PROMPT.format(chunk=chunk.text[:1500])
 
         try:
-            response = llm.invoke(prompt)
-            valid_triples = validate_triples(response.strip())
-            for t in valid_triples:
+            triples: List[Triple] = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=List[Triple],
+            )
+
+            for t in triples:
                 yield {
-                    "paper_id": batch[0].metadata.get("source_id", "unknown"),
+                    "paper_id": chunk.metadata.get("source_id", "unknown"),
                     "subject": t.subject.strip(),
                     "predicate": t.predicate.strip(),
                     "object": t.object.strip(),
                 }
         except Exception as e:
-            print(f"[WARN] Failed to extract facts in batch {batch_idx}: {e}")
+            print(f"[WARN] Failed to extract facts in chunk {idx}: {e}")
 
 
 # --------------------
 # Neo4j integration
 # --------------------
-def upsert_facts_to_neo4j(neo: Neo4jClient, facts: List[Dict[str, str]]) -> None:
+def upsert_facts_to_neo4j(
+    neo: "Neo4jClient",
+    facts: Generator[Dict[str, str], None, None],
+    show_progress: bool = False,
+) -> None:
     """
-    Push extracted triples into Neo4j.
+    Stream triples into Neo4j as they are extracted.
+    Facts is expected to be a generator from extract_facts_from_chunks_llm.
     """
-    for fact in facts:
+    iterator = facts
+    if show_progress:
+        iterator = tqdm(facts, desc="Writing facts to Neo4j", unit="fact")
+
+    for fact in iterator:
         try:
             neo.upsert_fact(
                 paper_id=fact["paper_id"],
