@@ -15,7 +15,7 @@ vectorstore:
 chunking:
   mode: "recursive"   # "recursive" | "sentence"
   chunk_size: 1000
-  chunk_overlap: 200
+  chunk_overlap: 200  # usually 10–20% of chunk_size
 
 retrieval:
   mode: "mmr"         # "similarity" | "mmr"

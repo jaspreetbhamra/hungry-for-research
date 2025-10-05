@@ -109,8 +109,8 @@ def ingest_folder(
         neo = Neo4jClient()
         # with Neo4jClient() as neo:
         count = 0
-        # for fact in extract_facts_from_chunks_llm(chunks, batch_size=5, max_batches=20):
-        for fact in extract_facts_from_chunks_llm(chunks, max_chunks=20):
+        for fact in extract_facts_from_chunks_llm(chunks, batch_size=5, max_batches=20):
+            # for fact in extract_facts_from_chunks_llm(chunks, max_chunks=20):
             upsert_facts_to_neo4j(neo, [fact])
             count += 1
         log.info("Graph population complete: %d facts inserted", count)

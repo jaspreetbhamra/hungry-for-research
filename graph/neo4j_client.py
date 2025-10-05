@@ -38,13 +38,15 @@ class Neo4jClient:
         """
         return self.run(cypher, {"paper_id": paper_id, "title": title})
 
-    def upsert_fact(self, paper_id: str, subject: str, predicate: str, obj: str):
+    def upsert_fact(
+        self, paper_id: str, subject: str, predicate: str, obj: str, chunk_id: str
+    ):
         """
         Upsert a Fact node linked to a Paper and Entities.
-        Uses fact_id = sha1(paper_id+subject+predicate+object) for idempotency.
+        Uses fact_id = sha1(paper_id+subject+predicate+object+chunk_id) for idempotency.
         """
         fact_id = hashlib.sha1(
-            f"{paper_id}|{subject}|{predicate}|{obj}".encode("utf-8")
+            f"{paper_id}|{subject}|{predicate}|{obj}|{chunk_id}".encode("utf-8")
         ).hexdigest()
 
         cypher = """
@@ -52,7 +54,10 @@ class Neo4jClient:
         MERGE (o:Entity {name: $object})
         MERGE (p:Paper {id: $paper_id})
         MERGE (f:Fact {fact_id: $fact_id})
-        ON CREATE SET f.pred = $predicate, f.subject = $subject, f.object = $object
+        ON CREATE SET f.pred = $predicate,
+                    f.subject = $subject,
+                    f.object = $object,
+                    f.chunk_id = $chunk_id
         MERGE (s)-[:SUBJECT]->(f)
         MERGE (f)-[:OBJECT]->(o)
         MERGE (p)-[:CONTAINS]->(f)
@@ -65,6 +70,7 @@ class Neo4jClient:
                 "subject": subject,
                 "predicate": predicate,
                 "object": obj,
+                "chunk_id": chunk_id,
                 "fact_id": fact_id,
             },
         )

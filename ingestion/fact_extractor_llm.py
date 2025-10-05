@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from typing import Dict, Generator, Iterable, List
 
-import instructor
 import orjson
-from openai import OpenAI
 from pydantic import BaseModel
 from tqdm import tqdm
 
@@ -25,23 +24,20 @@ Rules:
 - Use consistent predicates like ["uses", "introduces", "compares_with", "based_on"].
 - Always output in strict JSON, no text before or after.
 - Output must be a JSON list of objects.
-- Each object MUST have "subject", "predicate", "object".
+- Each object MUST have "subject", "predicate", "object", "chunk_id" fields.
+- Use the chunk_id marker provided in the text (e.g., [CHUNK_ID: doc123#chunk=7]).
+- Do NOT invent chunk_ids; always copy them exactly from the input.
 - All fields must be non-empty strings.
 - If multiple objects exist, output multiple triples.
 - Do not return arrays inside "object" or "subject".
-- Again, Every triple MUST include subject, predicate, object (all as strings). No missing fields.
-- Example:
-    [
-    {{"subject": "Transformer", "predicate": "introduced_in", "object": "2017"}},
-    {{"subject": "Transformer", "predicate": "applied_to", "object": "machine translation"}}
-    ]
 
 Format:
 [
   {{
     "subject": "<string>",
     "predicate": "<string>",
-    "object": "<string>"
+    "object": "<string>",
+    "chunk_id": "<string>"
   }},
   ...
 ]
@@ -49,6 +45,7 @@ Format:
 Examples:
 
 Input:
+[CHUNK_ID: doc123#chunk=0]
 "This paper introduces the Transformer model, which uses the Adam optimizer."
 
 Output:
@@ -56,19 +53,34 @@ Output:
   {{
     "subject": "Transformer",
     "predicate": "introduces",
-    "object": "Transformer model"
+    "object": "Transformer model",
+    "chunk_id": "doc123#chunk=0"
   }},
   {{
     "subject": "Transformer",
     "predicate": "uses",
-    "object": "Adam optimizer"
+    "object": "Adam optimizer",
+    "chunk_id": "doc123#chunk=0"
+  }}
+]
+
+Input:
+[CHUNK_ID: doc456#chunk=2]
+"This work compares convolutional networks with recurrent networks for sequence modeling."
+
+Output:
+[
+  {{
+    "subject": "Convolutional networks",
+    "predicate": "compares_with",
+    "object": "Recurrent networks",
+    "chunk_id": "doc456#chunk=2"
   }}
 ]
 
 Now process the following text:
 
 {chunk}
-
 """
 
 
@@ -79,6 +91,7 @@ class Triple(BaseModel):
     subject: str
     predicate: str
     object: str
+    chunk_id: str  # new field for traceability
 
 
 def validate_triples(raw_json: str) -> List[Triple]:
@@ -121,60 +134,79 @@ def unwrap_json_list(raw: str) -> str:
 # --------------------
 def extract_facts_from_chunks_llm(
     chunks: Iterable["Chunk"],
-    client: OpenAI | None = None,
-    model: str = "mistral",  # your Ollama model
-    max_chunks: int | None = None,  # optional limiter for debugging
+    client=None,
+    model: str = "mistral",
+    batch_size: int = 5,
+    max_batches: int | None = None,
     show_progress: bool = True,
 ) -> Generator[Dict[str, str], None, None]:
     """
-    Extract facts with one LLM call per chunk.
-    Yields dicts incrementally: {"paper_id", "subject", "predicate", "object"}.
+    Option B (with chunk_id):
+    - Groups chunks by document.
+    - Tags chunks with CHUNK_ID.
+    - LLM must return {"subject", "predicate", "object", "chunk_id"}.
     """
 
     if client is None:
+        # lazy imports
+        import instructor
+        from openai import OpenAI
+
         client = instructor.from_openai(
-            OpenAI(
-                base_url="http://localhost:11434/v1",
-                api_key="ollama",
-            ),
+            OpenAI(base_url="http://localhost:11434/v1", api_key="ollama"),
             mode=instructor.Mode.JSON,
         )
 
-    chunks_list = list(chunks)
-    iterator = (
-        tqdm(
-            enumerate(chunks_list),
-            total=len(chunks_list),
-            desc="Extracting facts",
-            unit="chunk",
-        )
-        if show_progress
-        else enumerate(chunks_list)
-    )
+    grouped: Dict[str, List[Chunk]] = defaultdict(list)
+    for c in chunks:
+        grouped[c.metadata["source_id"]].append(c)
 
-    for idx, chunk in iterator:
-        if max_chunks and idx >= max_chunks:
-            break
-
-        # Each chunk gets its own prompt
-        prompt = EXTRACTION_PROMPT.format(chunk=chunk.text[:1500])
-
-        try:
-            triples: List[Triple] = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                response_model=List[Triple],
+    for doc_id, doc_chunks in grouped.items():
+        batch_iter = list(batch_chunks(doc_chunks, size=batch_size))
+        iterator = (
+            tqdm(
+                enumerate(batch_iter),
+                total=len(batch_iter),
+                desc=f"Extracting facts ({doc_id})",
+                unit="batch",
             )
+            if show_progress
+            else enumerate(batch_iter)
+        )
 
-            for t in triples:
-                yield {
-                    "paper_id": chunk.metadata.get("source_id", "unknown"),
-                    "subject": t.subject.strip(),
-                    "predicate": t.predicate.strip(),
-                    "object": t.object.strip(),
-                }
-        except Exception as e:
-            print(f"[WARN] Failed to extract facts in chunk {idx}: {e}")
+        for batch_idx, batch in iterator:
+            if max_batches and batch_idx >= max_batches:
+                break
+
+            # tag chunks with [CHUNK_ID: ...]
+            chunk_texts = []
+            for c in batch:
+                chunk_id = f"{doc_id}#chunk={c.metadata.get('chunk_index', 0)}"
+                tagged = f"[CHUNK_ID: {chunk_id}]\n{c.text[:1500]}"
+                chunk_texts.append(tagged)
+
+            text = "\n\n---\n\n".join(chunk_texts)
+            prompt = EXTRACTION_PROMPT.format(chunk=text)
+
+            try:
+                triples: List[Triple] = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_model=List[Triple],
+                )
+
+                for t in triples:
+                    yield {
+                        "paper_id": doc_id,
+                        "chunk_id": t.chunk_id.strip(),
+                        "subject": t.subject.strip(),
+                        "predicate": t.predicate.strip(),
+                        "object": t.object.strip(),
+                    }
+            except Exception as e:
+                print(
+                    f"[WARN] Failed to extract facts for doc={doc_id} batch={batch_idx}: {e}"
+                )
 
 
 # --------------------
@@ -200,6 +232,7 @@ def upsert_facts_to_neo4j(
                 subject=fact["subject"],
                 predicate=fact["predicate"],
                 obj=fact["object"],
+                chunk_id=fact["chunk_id"],
             )
         except Exception as e:
             print(f"[WARN] Failed to insert fact {fact}: {e}")
