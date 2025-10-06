@@ -13,6 +13,9 @@ query:
 hybrid_query:
 	uv run python -m chains.cli_hybrid_query --neo "What optimizers are mentioned in Transformer papers?"
 
+hybrid_answer:
+	uv run python -m chains.cli_hybrid_answer --mode mmr --k 5 --fetch_k 30 --lambda_mult 0.4 "How does ResNet differ from VGG?"
+
 test_extract:
 	uv run python -m scripts.test_extraction
 
